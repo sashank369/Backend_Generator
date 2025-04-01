@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 from random import randint
 from typing import Optional
-
 from pydantic import BaseModel
-
 from crewai.flow.flow import Flow, listen, start,router,or_
 import shutil
-
+import json
+from code_generator.crews.File_Writter.File_writer import FileWriter
+from code_generator.crews.Validate_Layer.Validate_Layer import ValidateLayer
 from code_generator.crews.api_parser.api_parser import ApiParser
 from code_generator.crews.Model_Layer.Model_Layer import ModelLayer
 from code_generator.crews.evaluate_api_parser.evaluate_api_parser import EvaluateApiParser
@@ -15,10 +15,11 @@ import requests
 import zipfile
 import os
 import openai
+from typing import Dict
 import subprocess
 import re
 
-# Load API key from environment variable
+# Load API key from environment variable    
 openai.api_key = os.getenv("OPEN_API_KEY")
 
 
@@ -31,19 +32,21 @@ class CodeGeneratorState(BaseModel):
     build_type:str='maven'
     boot_version:str='3.3.0'
     base_url:str = "https://start.spring.io/starter.zip"
-    api_result: dict = {}
-    entity_result: dict = {}
-    model_path: str = ""
-    feedback:Optional[str]=""
-    valid:bool=False
-    retry_count:int=0
+    api_parser_result: dict = {}
+    Generated_code_result: Dict[str, Dict[str, str]] = {}
+    folder_path: str = ""
+    parser_evaluator_feedback:Optional[str]=""
+    parser_valid:bool=False
+    parser_evaluator_count:int=0
     build_output:Optional[str]=""
-    count:int=0
-    
-    
+
 
 
 class CodeGenerator(Flow[CodeGeneratorState]):
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+#Intialization (Taking input from user for creating spring boot boiler plate code)
 
     @start()
     def Intialization(self):
@@ -56,10 +59,13 @@ class CodeGenerator(Flow[CodeGeneratorState]):
 
 
 
+# -----------------------------------------------------------------------------------------------------------------------
+
+#Parsing the API
+
     @listen(or_(Intialization,"retry"))
     def api_parser(self):
         print("parsing the api")
-        self.state.count+=1
         result = (
             ApiParser()
             .crew()
@@ -67,30 +73,40 @@ class CodeGenerator(Flow[CodeGeneratorState]):
         )
 
         # print("api result: ", result.raw)
-        self.state.api_result = result.raw  # Save the result in state
+        self.state.api_parser_result = result.raw  # Save the result in state
         print("API parsed successfully and stored in state.")
+
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+#Evaluating the API parser result
 
     @router(api_parser)
     def evaluate_api(self):
-        if self.state.retry_count >3:
+        if self.state.parser_evaluator_count >3:
             return "max_retry"
         # Evaluate the result of the API parser
-        self.state.count+=1
-        result=EvaluateApiParser().crew().kickoff(inputs={"api_result":self.state.api_result})
-        self.state.valid=result["valid"]
-        self.state.feedback=result["feedback"]
+        result=EvaluateApiParser().crew().kickoff(inputs={"api_parser_result":self.state.api_parser_result})
+        self.state.parser_valid=result["parser_valid"]
+        self.state.parser_evaluator_feedback=result["parser_evaluator_feedback"]
         
-        # print("valid",self.state.valid)
-        # print("feedback",self.state.feedback)
-        self.state.retry_count+=1
+        # print("parser_valid",self.state.parser_valid)
+        # print("parser_evaluator_feedback",self.state.parser_evaluator_feedback)
+        self.state.parser_evaluator_count+=1
         
-        if self.state.valid:
+        if self.state.parser_valid:
             return "completed"
         return "retry"
 
+
+
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+# Generating the boiler plate Spring Boot project.
+
     @listen(or_("completed","max_retry"))
     def generate_spring_boot_project(self):
-        self.state.count+=1
         params = {
             'type': f'{self.state.build_type}-project',
             'language': self.state.language,
@@ -125,6 +141,11 @@ class CodeGenerator(Flow[CodeGeneratorState]):
             return "Failed"
         
 
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+# Configuring the application properties
+
     @listen(generate_spring_boot_project)
     def configure_application_properties(self):
 
@@ -132,7 +153,6 @@ class CodeGenerator(Flow[CodeGeneratorState]):
     
         # # Replace escape sequences with actual newlines
         # properties_content = properties_content.replace("\\n", "\n")
-        self.state.count+=1
         properties_content = """spring.datasource.url=jdbc:h2:mem:testdb
 spring.datasource.driverClassName=org.h2.Driver
 spring.datasource.username=sa
@@ -153,16 +173,20 @@ spring.h2.console.enabled=true
 
     
     
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+#Generating the whole application 
+
     @router(configure_application_properties)
     def SpringBootApplication(self):
         print("Generating model")
-        self.state.count+=1
-        # print("API Result: ", self.state.api_result)
+        # print("API Result: ", self.state.api_parser_result)
         file_path = "api_parser_result.md"
 
         # Write the API result to the file
         with open(file_path, "w") as file:
-            file.write(f"api parser result: {self.state.api_result}\n")
+            file.write(f"api parser result: {self.state.api_parser_result}\n")
 
         # Example base path
         base_path = os.path.join(os.path.abspath(self.state.project_name), "src", "main", "java")
@@ -181,24 +205,85 @@ spring.h2.console.enabled=true
                 if os.path.isdir(file_path):
                     shutil.rmtree(file_path)  # Delete subdirectories
             
-        self.state.model_path = models_path
+        self.state.folder_path = models_path
         print(f"Models directory path: {models_path}")
         kickoff_inputs = {
-            'api_result': self.state.api_result,
+            'api_parser_result': self.state.api_parser_result,
             'project_name': self.state.project_name,
             'package_name': self.state.package_name,
             'models_path': models_path,
-            'feedback':self.state.build_output
-        }
-
-        
+            # 'feedback':self.state.build_output
+        }    
 
         result = ModelLayer().crew().kickoff(inputs=kickoff_inputs)
 
         print("Model result: ", result.raw)
-        self.state.entity_result = result.raw  # Save the result in state
-        print("Entity Model successfully and stored in state. With count :",self.state.count)
+        self.state.Generated_code_result = result.raw  # Save the result in state
+        print("Entity Model successfully and stored in state.")
+
+
+        # self.state.Generated_code_result = result.raw  
     
+        # file_path = "Generated_code_result.json"
+        # with open(file_path, "w") as file:
+        #     json.dump(self.state.Generated_code_result, file, indent=4)
+
+
+# -----------------------------------------------------------------------------------------------------------------------
+
+#Output Validator
+
+    # @listen(SpringBootApplication)
+    # def validate_output(self):
+    #     print("Validating the output")
+  
+    #     kickoff_inputs = {
+    #         'api_parser_result': self.state.api_parser_result,
+    #         'project_name': self.state.project_name,
+    #         'package_name': self.state.package_name,
+    #         'models_path': self.state.folder_path,
+    #         'code_output': self.state.code_output,
+    #     }
+
+        
+
+    #     result = ValidateLayer().crew().kickoff(inputs=kickoff_inputs)
+
+    #     print("Model result: ", result.raw)
+    #     self.state.Generated_code_result = result.raw  # Save the result in state
+    #     print("Entity Model successfully and stored in state.")
+
+
+
+
+
+# -----------------------------------------------------------------------------------------------------------------------
+#file writter crew
+
+    # @listen(validate_output)
+    # def File_writter(self):
+    #     print("Writting the code into the files")
+
+    #     kickoff_inputs = {
+    #         'api_parser_result': self.state.api_parser_result,
+    #         'project_name': self.state.project_name,
+    #         'package_name': self.state.package_name,
+    #         'models_path': self.state.folder_path,
+    #         'code_output': self.state.code_output,
+    #     }
+
+        
+
+    #     result = FileWriter().crew().kickoff(inputs=kickoff_inputs)
+
+    #     print("Model result: ", result.raw)
+    #     self.state.Generated_code_result = result.raw  # Save the result in state
+    #     print("Entity Model successfully and stored in state.)
+
+# -----------------------------------------------------------------------------------------------------------------------
+    
+#Building the code 
+
     # @router(or_(SpringBootApplication,"buildfix"))
     # def build_and_run_springboot(self):
     #     try:
@@ -251,13 +336,13 @@ spring.h2.console.enabled=true
 
 
 def kickoff():
-    poem_flow = CodeGenerator()
-    poem_flow.kickoff()
+    Code_generator_flow = CodeGenerator()
+    Code_generator_flow.kickoff()
 
 
 def plot():
-    poem_flow = CodeGenerator()
-    poem_flow.plot()
+    Code_generator_flow = CodeGenerator()
+    Code_generator_flow.plot()
 
 
 if __name__ == "__main__":

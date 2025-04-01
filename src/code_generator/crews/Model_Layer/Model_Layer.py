@@ -3,9 +3,15 @@ from crewai import Agent, Crew, Process, Task
 from crewai.project import CrewBase, agent, crew, task
 from crewai_tools import FileReadTool,FileWriterTool
 from dotenv import load_dotenv
+from typing import Dict
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 import os
 load_dotenv()
+
+# class Finalresult(BaseModel):
+#     # Each key corresponds to a layer (or a file group), mapping file names to code content.
+#     result: Dict[str, Dict[str, str]]
 
 @CrewBase
 class ModelLayer:
@@ -47,3 +53,12 @@ class ModelLayer:
             process=Process.sequential,
             verbose=True,
         )
+
+
+
+
+
+
+
+
+    # The final approved code should be returned as a structured JSON object (or dictionary) with keys for each layer. For each layer, include a mapping of file names to their properly formatted file content.

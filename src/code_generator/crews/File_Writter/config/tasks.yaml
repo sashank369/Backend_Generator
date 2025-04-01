@@ -3,10 +3,7 @@ write_spring_boot_application:
       Given the structured JSON containing the generated Spring Boot code, create a fully functional Spring Boot application.
       The process includes:
         - Parsing the provided JSON structure.
-        - Creating the standard Spring Boot directory structure:
-            - Source code in `src/main/java/{base_package}/`
-            - Resources in `src/main/resources/` (e.g., application.properties)
-            - Test code in `src/test/java/{base_package}/`
+            
         - Organizing files into proper packages:
             - `model` for JPA entities.
             - `repository` for Spring Data JPA repositories.
